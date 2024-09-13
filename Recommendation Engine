@@ -1,1 +1,53 @@
+from pyspark.sql import SparkSession
+from pyspark.sql.functions import col, lit, sqrt, sum as sql_sum
+from pyspark.ml.feature import VectorAssembler
+from pyspark.ml.linalg import Vectors
+from pyspark.ml.stat import Summarizer
 
+# Crear una sesión de Spark
+spark = SparkSession.builder.appName("ProductRecommendations").getOrCreate()
+
+# Datos de ejemplo
+data = [
+    (1, 101, 5.0),
+    (1, 102, 3.0),
+    (1, 103, 2.5),
+    (2, 101, 2.0),
+    (2, 102, 2.5),
+    (2, 103, 5.0),
+    (3, 101, 5.0),
+    (3, 104, 4.0),
+    (3, 105, 1.0),
+    (4, 102, 4.0),
+    (4, 103, 4.5),
+    (4, 104, 5.0)
+]
+
+# Crear un DataFrame
+columns = ["user_id", "product_id", "rating"]
+df = spark.createDataFrame(data, columns)
+
+# Crear una matriz de usuario-producto
+assembler = VectorAssembler(inputCols=["rating"], outputCol="features")
+product_features = assembler.transform(df).select("user_id", "product_id", "features")
+
+# Calcular la similitud de coseno
+product_features = product_features.alias("a").join(product_features.alias("b"), col("a.user_id") == col("b.user_id")) \
+    .select(col("a.product_id").alias("product_a"), col("b.product_id").alias("product_b"), col("a.features").alias("features_a"), col("b.features").alias("features_b"))
+
+product_similarity = product_features.withColumn("dot_product", sql_sum(col("features_a") * col("features_b"))) \
+    .withColumn("norm_a", sqrt(sql_sum(col("features_a") * col("features_a")))) \
+    .withColumn("norm_b", sqrt(sql_sum(col("features_b") * col("features_b")))) \
+    .withColumn("cosine_similarity", col("dot_product") / (col("norm_a") * col("norm_b")))
+
+# Filtrar las recomendaciones
+recommendations = product_similarity.filter(col("product_a") != col("product_b")) \
+    .orderBy(col("cosine_similarity").desc()) \
+    .select("product_a", "product_b", "cosine_similarity") \
+    .limit(5)
+
+# Mostrar las recomendaciones
+recommendations.show()
+
+# Detener la sesión de Spark
+spark.stop()
